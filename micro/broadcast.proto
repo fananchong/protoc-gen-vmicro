@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package micro;
+option go_package = "github.com/fananchong/protoc-gen-vmicro/micro;micro";
+import "protoc-gen-go/descriptor/descriptor.proto";
+
+extend google.protobuf.MethodOptions {
+    bool Broadcast = 50000;
+}
+
+message NoReply {}
