@@ -67,6 +67,7 @@ func (g *micro) Generate(file *generator.FileDescriptor) {
 		return
 	}
 
+	g.gen.AddImport("github.com/fananchong/protoc-gen-vmicro/micro")
 	contextPkg = string(g.gen.AddImport(contextPkgPath))
 	clientPkg = string(g.gen.AddImport(clientPkgPath))
 	serverPkg = string(g.gen.AddImport(serverPkgPath))
@@ -78,6 +79,8 @@ func (g *micro) Generate(file *generator.FileDescriptor) {
 
 // GenerateImports generates the import declaration for this file.
 func (g *micro) GenerateImports(file *generator.FileDescriptor) {
+	g.P("// Reference imports to suppress errors if they are not otherwise used.")
+	g.P("var _ = micro.NoReply")
 }
 
 func unexport(s string) string {
