@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/golang/protobuf/proto"
 	pb "github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/golang/protobuf/protoc-gen-go/generator"
 )
@@ -117,7 +118,9 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 	g.P()
 	g.P("type ", servName, "Callback interface {")
 	for _, method := range service.Method {
-		g.P(g.generateClientCallbackSignature(servName, method))
+		if isBroadcast := isBroadcastFunc(method); !isBroadcast {
+			g.P(g.generateClientCallbackSignature(servName, method))
+		}
 	}
 	g.P("}")
 	g.P()
@@ -152,7 +155,11 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 	for _, method := range service.Method {
 		descExpr := fmt.Sprintf("&%s.Methods[%d]", serviceDescVar, methodIndex)
 		methodIndex++
-		g.generateClientMethod(serviceName, servName, serviceDescVar, method, descExpr)
+		if isBroadcast := isBroadcastFunc(method); !isBroadcast {
+			g.generateClientMethod(serviceName, servName, serviceDescVar, method, descExpr)
+		} else {
+			g.generateClientBroadcastMethod(serviceName, servName, serviceDescVar, method, descExpr)
+		}
 	}
 
 	g.P("// Server API for ", servName, " service")
@@ -175,12 +182,23 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 	g.P()
 }
 
+func isBroadcastFunc(method *pb.MethodDescriptorProto) bool {
+	isBroadcast := false
+	if v, err := proto.GetExtension(method.GetOptions(), E_Broadcast); err == nil {
+		isBroadcast = *(v.(*bool))
+	}
+	return isBroadcast
+}
+
 // generateClientSignature returns the client-side signature for a method.
 func (g *micro) generateClientSignature(servName string, method *pb.MethodDescriptorProto) string {
 	origMethName := method.GetName()
 	methName := generator.CamelCase(origMethName)
 	reqArg := ", req *" + g.typeName(method.GetInputType())
-	return fmt.Sprintf("%s(ctx %s.Context%s, opts ...%s.CallOption) error", methName, contextPkg, reqArg, clientPkg)
+	if isBroadcast := isBroadcastFunc(method); !isBroadcast {
+		return fmt.Sprintf("%s(ctx %s.Context%s, opts ...%s.CallOption) error", methName, contextPkg, reqArg, clientPkg)
+	}
+	return fmt.Sprintf("%s(ctx %s.Context%s, opts ...%s.CallOption)", "Broadcast"+methName, contextPkg, reqArg, clientPkg)
 }
 
 func (g *micro) generateClientCallbackSignature(servName string, method *pb.MethodDescriptorProto) string {
@@ -210,6 +228,20 @@ func (g *micro) generateClientMethod(reqServ, servName, serviceDescVar string, m
 	g.P()
 }
 
+func (g *micro) generateClientBroadcastMethod(reqServ, servName, serviceDescVar string, method *pb.MethodDescriptorProto, descExpr string) {
+	reqMethod := fmt.Sprintf("%s.Broadcast%s", servName, method.GetName())
+	servAlias := servName + "Service"
+	// strip suffix
+	if strings.HasSuffix(servAlias, "ServiceService") {
+		servAlias = strings.TrimSuffix(servAlias, "Service")
+	}
+	g.P("func (c *", unexport(servAlias), ") ", g.generateClientSignature(servName, method), "{")
+	g.P(`r := c.c.NewRequest(c.name, "`, reqMethod, `", req)`)
+	g.P(`c.c.Broadcast(ctx, r, opts...)`)
+	g.P("}")
+	g.P()
+}
+
 // generateServerSignature returns the server-side signature for a method.
 func (g *micro) generateServerSignature(servName string, method *pb.MethodDescriptorProto) string {
 	origMethName := method.GetName()
@@ -218,8 +250,13 @@ func (g *micro) generateServerSignature(servName string, method *pb.MethodDescri
 	ret := "error"
 	reqArgs = append(reqArgs, "ctx "+contextPkg+".Context")
 	reqArgs = append(reqArgs, "req *"+g.typeName(method.GetInputType()))
-	reqArgs = append(reqArgs, "rsp *"+g.typeName(method.GetOutputType()))
-	return methName + "(" + strings.Join(reqArgs, ", ") + ") " + ret
+
+	if isBroadcast := isBroadcastFunc(method); !isBroadcast {
+		reqArgs = append(reqArgs, "rsp *"+g.typeName(method.GetOutputType()))
+		return methName + "(" + strings.Join(reqArgs, ", ") + ") " + ret
+	}
+	reqArgs = append(reqArgs, "rsp *micro.NoReply")
+	return "Broadcast" + methName + "(" + strings.Join(reqArgs, ", ") + ") " + ret
 }
 
 // AddPluginToParams Simplify the protoc call statement by adding 'plugins=vmicro' directly to the command line arguments.
